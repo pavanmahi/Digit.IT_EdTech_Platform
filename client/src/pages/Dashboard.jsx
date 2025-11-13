@@ -16,6 +16,9 @@ function Dashboard({ setIsAuthenticated }) {
     description: '',
     dueDate: ''
   })
+  const [inviteCode, setInviteCode] = useState('')
+  const [inviteLoading, setInviteLoading] = useState(false)
+  const [editValues, setEditValues] = useState({})
 
   useEffect(() => {
     const userData = localStorage.getItem('user')
@@ -23,6 +26,7 @@ function Dashboard({ setIsAuthenticated }) {
       setUser(JSON.parse(userData))
     }
     fetchTasks()
+    fetchInviteCodeIfTeacher()
   }, [])
 
   useEffect(() => {
@@ -38,6 +42,21 @@ function Dashboard({ setIsAuthenticated }) {
       setError(err.response?.data?.message || 'Failed to load tasks')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchInviteCodeIfTeacher = async () => {
+    try {
+      const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+      if (currentUser?.role !== 'teacher') return
+      setInviteLoading(true)
+      const resp = await api.get('/auth/invite-code')
+      setInviteCode(resp.data.inviteCode)
+    } catch (err) {
+      // Do not block dashboard if invite code fails
+      console.warn('Failed to load invite code', err)
+    } finally {
+      setInviteLoading(false)
     }
   }
 
@@ -93,6 +112,50 @@ function Dashboard({ setIsAuthenticated }) {
   const formatDate = (dateString) => {
     if (!dateString) return 'No due date'
     return new Date(dateString).toLocaleDateString()
+  }
+
+  const toInputDate = (dateString) => {
+    if (!dateString) return ''
+    const d = new Date(dateString)
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  const startEdit = (task) => {
+    setEditValues(prev => ({
+      ...prev,
+      [task._id]: {
+        title: task.title,
+        description: task.description,
+        dueDate: toInputDate(task.dueDate)
+      }
+    }))
+  }
+
+  const cancelEdit = (taskId) => {
+    setEditValues(prev => {
+      const next = { ...prev }
+      delete next[taskId]
+      return next
+    })
+  }
+
+  const saveEdit = async (taskId) => {
+    try {
+      const values = editValues[taskId]
+      if (!values) return
+      await api.put(`/tasks/${taskId}`, {
+        title: values.title,
+        description: values.description,
+        dueDate: values.dueDate || null
+      })
+      cancelEdit(taskId)
+      fetchTasks()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to update task details')
+    }
   }
 
   const getProgressColor = (progress) => {
@@ -158,6 +221,44 @@ function Dashboard({ setIsAuthenticated }) {
             <p className="text-sm text-blue-800">
               <span className="font-semibold">Assigned Teacher ID:</span> {user.teacherId}
             </p>
+          </div>
+        )}
+
+        {user?.role === 'teacher' && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-green-800">
+                  <span className="font-semibold">Invite Code:</span> {inviteLoading ? 'Loading…' : inviteCode || 'Not generated'}
+                </p>
+                <p className="text-xs text-gray-600 mt-1">Share this code with students to join your class.</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-secondary"
+                  onClick={() => navigator.clipboard.writeText(inviteCode || '')}
+                  disabled={!inviteCode}
+                >
+                  Copy
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={async () => {
+                    try {
+                      setInviteLoading(true)
+                      const resp = await api.post('/auth/invite-code/rotate')
+                      setInviteCode(resp.data.inviteCode)
+                    } catch (err) {
+                      setError(err.response?.data?.message || 'Failed to rotate invite code')
+                    } finally {
+                      setInviteLoading(false)
+                    }
+                  }}
+                >
+                  Rotate Code
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -248,8 +349,11 @@ function Dashboard({ setIsAuthenticated }) {
               No tasks found. {filter !== 'all' && 'Try changing the filter or '}Create your first task to get started!
             </div>
           ) : (
-            filteredTasks.map(task => (
-              <div key={task.id} className="card hover:shadow-lg transition duration-200">
+            filteredTasks.map(task => {
+              const ownerId = typeof task.userId === 'object' ? (task.userId?._id || task.userId) : task.userId
+              const isOwn = String(ownerId) === String(user?.id)
+              return (
+              <div key={task._id} className="card hover:shadow-lg transition duration-200">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1">
                     <h3 className="text-xl font-semibold text-gray-900 mb-2">
@@ -257,11 +361,11 @@ function Dashboard({ setIsAuthenticated }) {
                     </h3>
                     <p className="text-gray-600 mb-3">{task.description}</p>
                     <div className="flex items-center space-x-4 text-sm text-gray-500">
-                      <span>Due: {formatDate(task.due_date)}</span>
-                      <span>Created: {formatDate(task.created_at)}</span>
-                      {user?.role === 'teacher' && task.user_id !== user.id && (
+                      <span>Due: {formatDate(task.dueDate)}</span>
+                      <span>Created: {formatDate(task.createdAt)}</span>
+                      {user?.role === 'teacher' && !isOwn && (
                         <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs">
-                          Student Task
+                          Student Task{task.userId?.email ? `: ${task.userId.email}` : ''}
                         </span>
                       )}
                     </div>
@@ -273,11 +377,61 @@ function Dashboard({ setIsAuthenticated }) {
                   </div>
                 </div>
                 
-                {task.user_id === user?.id && (
+                {isOwn && user?.role === 'teacher' && (
+                  <div className="pt-4 border-t border-gray-200">
+                    {editValues[task._id] ? (
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          className="input-field w-full"
+                          value={editValues[task._id].title}
+                          onChange={e => setEditValues(prev => ({...prev, [task._id]: {...prev[task._id], title: e.target.value}}))}
+                        />
+                        <textarea
+                          className="input-field w-full"
+                          value={editValues[task._id].description}
+                          onChange={e => setEditValues(prev => ({...prev, [task._id]: {...prev[task._id], description: e.target.value}}))}
+                        />
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={editValues[task._id].dueDate}
+                          onChange={e => setEditValues(prev => ({...prev, [task._id]: {...prev[task._id], dueDate: e.target.value}}))}
+                        />
+                        <div className="flex gap-2">
+                          <button className="btn-primary" onClick={() => saveEdit(task._id)}>Save</button>
+                          <button className="btn-secondary" onClick={() => cancelEdit(task._id)}>Cancel</button>
+                          <button className="btn-danger ml-auto" onClick={() => handleDeleteTask(task._id)}>Delete</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <button className="btn-primary" onClick={() => startEdit(task)}>Edit Details</button>
+                        <button className="btn-danger ml-auto" onClick={() => handleDeleteTask(task._id)}>Delete</button>
+                      </div>
+                    )}
+
+                    {Array.isArray(task.assignees) && task.assignees.length > 0 && (
+                      <div className="mt-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-2">Student Progress</h4>
+                        <ul className="space-y-1 text-sm text-gray-700">
+                          {task.assignees.map(a => (
+                            <li key={a.studentId} className="flex justify-between">
+                              <span>{a.email}</span>
+                              <span className={`px-2 py-0.5 rounded ${getProgressColor(a.progress)}`}>{getProgressLabel(a.progress)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {isOwn && user?.role === 'student' && (
                   <div className="flex items-center space-x-3 pt-4 border-t border-gray-200">
                     <select
                       value={task.progress}
-                      onChange={(e) => handleUpdateProgress(task.id, e.target.value)}
+                      onChange={(e) => handleUpdateProgress(task._id, e.target.value)}
                       className="input-field max-w-xs"
                     >
                       <option value="not-started">Not Started</option>
@@ -285,7 +439,7 @@ function Dashboard({ setIsAuthenticated }) {
                       <option value="completed">Completed</option>
                     </select>
                     <button
-                      onClick={() => handleDeleteTask(task.id)}
+                      onClick={() => handleDeleteTask(task._id)}
                       className="btn-danger"
                     >
                       Delete
@@ -293,13 +447,13 @@ function Dashboard({ setIsAuthenticated }) {
                   </div>
                 )}
                 
-                {user?.role === 'teacher' && task.user_id !== user.id && (
+                {user?.role === 'teacher' && !isOwn && (
                   <div className="pt-4 border-t border-gray-200 text-sm text-gray-500 italic">
                     This task belongs to one of your students. You can view it but cannot modify it.
                   </div>
                 )}
               </div>
-            ))
+            )})
           )}
         </div>
       </div>

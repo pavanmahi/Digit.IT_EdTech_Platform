@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/axios'
 
@@ -8,24 +8,10 @@ function Signup() {
     email: '',
     password: '',
     role: 'student',
-    teacherId: ''
+    inviteCode: ''
   })
-  const [teachers, setTeachers] = useState([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    fetchTeachers()
-  }, [])
-
-  const fetchTeachers = async () => {
-    try {
-      const response = await api.get('/auth/teachers')
-      setTeachers(response.data.teachers)
-    } catch (err) {
-      console.error('Failed to fetch teachers:', err)
-    }
-  }
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -53,8 +39,8 @@ function Signup() {
       return
     }
 
-    if (formData.role === 'student' && !formData.teacherId) {
-      setError('Please select a teacher')
+    if (formData.role === 'student' && !formData.inviteCode) {
+      setError('Invite code is required for student signup')
       setLoading(false)
       return
     }
@@ -67,7 +53,7 @@ function Signup() {
       }
 
       if (formData.role === 'student') {
-        submitData.teacherId = formData.teacherId
+        submitData.inviteCode = formData.inviteCode
       }
 
       await api.post('/auth/signup', submitData)
@@ -144,22 +130,17 @@ function Signup() {
           {formData.role === 'student' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Select Your Teacher
+                Teacher Invite Code
               </label>
-              <select
-                name="teacherId"
-                value={formData.teacherId}
+              <input
+                type="text"
+                name="inviteCode"
+                value={formData.inviteCode}
                 onChange={handleChange}
                 className="input-field"
+                placeholder="Enter invite code provided by your teacher"
                 required
-              >
-                <option value="">-- Select a teacher --</option>
-                {teachers.map(teacher => (
-                  <option key={teacher.id} value={teacher.id}>
-                    {teacher.email}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
 
