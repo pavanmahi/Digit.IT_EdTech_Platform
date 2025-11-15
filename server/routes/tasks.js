@@ -3,6 +3,7 @@ const { body, param, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Progress = require('../models/Progress');
 
 const router = express.Router();
 
@@ -11,45 +12,40 @@ router.use(authenticateToken);
 router.get('/', async (req, res, next) => {
   try {
     const { id: userId, role } = req.user;
-    let tasks;
 
     if (role === 'student') {
-      tasks = await Task.find({ userId }).sort({ createdAt: -1 });
-    } else if (role === 'teacher') {
-      const students = await User.find({ teacherId: userId }).select('_id');
-      const studentIds = students.map(s => s._id);
-      tasks = await Task.find({
-        $or: [
-          { userId },
-          { userId: { $in: studentIds } }
-        ]
-      }).sort({ createdAt: -1 });
-
-      // For teacher-owned tasks, attach a list of assigned students and their progress
-      const ownTaskIds = tasks.filter(t => String(t.userId) === String(userId)).map(t => t._id);
-      if (ownTaskIds.length) {
-        const assigneeTasks = await Task.find({ sourceTaskId: { $in: ownTaskIds } })
-          .populate('userId', 'email')
-          .select('userId progress sourceTaskId');
-        const map = assigneeTasks.reduce((acc, st) => {
-          const key = String(st.sourceTaskId);
-          if (!acc[key]) acc[key] = [];
-          acc[key].push({ studentId: st.userId._id, email: st.userId.email, progress: st.progress });
-          return acc;
-        }, {});
-        tasks = tasks.map(t => {
-          if (String(t.userId) === String(userId)) {
-            const assignees = map[String(t._id)] || [];
-            return { ...t.toObject(), assignees };
-          }
-          return t;
-        });
-      }
-    } else {
-      tasks = [];
+      const progressDocs = await Progress.find({ studentId: userId })
+        .populate('taskId')
+        .sort({ updatedAt: -1 });
+      const tasks = progressDocs.map(p => {
+        const task = p.taskId;
+        if (!task) return null;
+        const obj = task.toObject();
+        return { ...obj, progress: p.progress, progressId: p._id };
+      }).filter(Boolean);
+      return res.json({ success: true, tasks });
     }
 
-    res.json({ success: true, tasks });
+    if (role === 'teacher') {
+      const tasks = await Task.find({ teacherId: userId }).sort({ createdAt: -1 });
+      const taskIds = tasks.map(t => t._id);
+      let map = {};
+      if (taskIds.length) {
+        const statuses = await Progress.find({ taskId: { $in: taskIds } })
+          .populate('studentId', 'email')
+          .select('studentId progress taskId');
+        map = statuses.reduce((acc, s) => {
+          const key = String(s.taskId);
+          if (!acc[key]) acc[key] = [];
+          acc[key].push({ studentId: s.studentId._id, email: s.studentId.email, progress: s.progress });
+          return acc;
+        }, {});
+      }
+      const enriched = tasks.map(t => ({ ...t.toObject(), assignees: map[String(t._id)] || [] }));
+      return res.json({ success: true, tasks: enriched });
+    }
+
+    res.json({ success: true, tasks: [] });
   } catch (error) {
     next(error);
   }
@@ -59,8 +55,7 @@ router.post('/',
   [
     body('title').notEmpty().trim(),
     body('description').notEmpty().trim(),
-    body('dueDate').optional().isISO8601(),
-    body('progress').optional().isIn(['not-started', 'in-progress', 'completed'])
+    body('dueDate').optional().isISO8601()
   ],
   async (req, res, next) => {
     try {
@@ -69,46 +64,32 @@ router.post('/',
         return res.status(400).json({ success: false, message: 'Invalid input: ' + errors.array().map(e => e.msg).join(', ') });
       }
 
-      const { title, description, dueDate, progress } = req.body;
-      const userId = req.user.id;
+      const { title, description, dueDate } = req.body;
+      const teacherId = req.user.id;
       const role = req.user.role;
 
-      // If a teacher creates a task, clone it for each of their students
-      if (role === 'teacher') {
-        const teacherTask = await Task.create({
-          userId,
-          title,
-          description,
-          dueDate: dueDate || null,
-          progress: progress || 'not-started'
-        });
-
-        const students = await User.find({ teacherId: userId }).select('_id');
-        if (students.length) {
-          const clones = students.map(s => ({
-            userId: s._id,
-            sourceTaskId: teacherTask._id,
-            title,
-            description,
-            dueDate: dueDate || null,
-            progress: 'not-started'
-          }));
-          await Task.insertMany(clones);
-        }
-
-        return res.status(201).json({ success: true, message: 'Task created for class', task: teacherTask, assignedCount: students.length });
+      if (role !== 'teacher') {
+        return res.status(403).json({ success: false, message: 'Only teachers can create tasks' });
       }
 
-      // Student creating their own task
-      const task = await Task.create({
-        userId,
+      const teacherTask = await Task.create({
+        teacherId,
         title,
         description,
-        dueDate: dueDate || null,
-        progress: progress || 'not-started'
+        dueDate: dueDate || null
       });
 
-      res.status(201).json({ success: true, message: 'Task created successfully', task });
+      const students = await User.find({ assignedTeacher: teacherId }).select('_id');
+      if (students.length) {
+        const progressDocs = students.map(s => ({
+          studentId: s._id,
+          taskId: teacherTask._id,
+          progress: 'Not Started'
+        }));
+        await Progress.insertMany(progressDocs);
+      }
+
+      return res.status(201).json({ success: true, message: 'Task created for class', task: teacherTask, assignedCount: students.length });
     } catch (error) {
       next(error);
     }
@@ -121,7 +102,7 @@ router.put('/:id',
     body('title').optional().notEmpty().trim(),
     body('description').optional().notEmpty().trim(),
     body('dueDate').optional().isISO8601(),
-    body('progress').optional().isIn(['not-started', 'in-progress', 'completed'])
+    body('progress').optional().isIn(['Not Started', 'In Progress', 'Completed'])
   ],
   async (req, res, next) => {
     try {
@@ -134,40 +115,45 @@ router.put('/:id',
       const userId = req.user.id;
       const role = req.user.role;
 
-      const task = await Task.findById(taskId).select('userId');
+      const task = await Task.findById(taskId).select('teacherId');
       if (!task) {
         return res.status(404).json({ success: false, message: 'Task not found' });
       }
 
-      if (task.userId.toString() !== userId) {
-        return res.status(403).json({ success: false, message: 'Unauthorized: You can only update your own tasks' });
-      }
-
-      const { title, description, dueDate, progress } = req.body;
-      const updated = await Task.findByIdAndUpdate(
-        taskId,
-        {
-          ...(title !== undefined ? { title } : {}),
-          ...(description !== undefined ? { description } : {}),
-          ...(dueDate !== undefined ? { dueDate: dueDate || null } : {}),
-          ...(progress !== undefined ? { progress } : {})
-        },
-        { new: true }
-      );
-
-      // If a teacher updates core fields of their own task, propagate to student clones
-      if (role === 'teacher' && (title !== undefined || description !== undefined || dueDate !== undefined)) {
-        const setFields = {
-          ...(title !== undefined ? { title } : {}),
-          ...(description !== undefined ? { description } : {}),
-          ...(dueDate !== undefined ? { dueDate: dueDate || null } : {})
-        };
-        if (Object.keys(setFields).length) {
-          await Task.updateMany({ sourceTaskId: taskId }, { $set: setFields });
+      if (role === 'teacher') {
+        if (String(task.teacherId) !== String(userId)) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: You can only update your own tasks' });
         }
+        const { title, description, dueDate } = req.body;
+        const updated = await Task.findByIdAndUpdate(
+          taskId,
+          {
+            ...(title !== undefined ? { title } : {}),
+            ...(description !== undefined ? { description } : {}),
+            ...(dueDate !== undefined ? { dueDate: dueDate || null } : {})
+          },
+          { new: true }
+        );
+        return res.json({ success: true, message: 'Task updated successfully', task: updated });
       }
 
-      res.json({ success: true, message: 'Task updated successfully', task: updated });
+      if (role === 'student') {
+        const { progress } = req.body;
+        if (progress === undefined) {
+          return res.status(400).json({ success: false, message: 'Progress value required' });
+        }
+        const updated = await Progress.findOneAndUpdate(
+          { studentId: userId, taskId },
+          { $set: { progress } },
+          { new: true }
+        );
+        if (!updated) {
+          return res.status(404).json({ success: false, message: 'Progress record not found' });
+        }
+        return res.json({ success: true, message: 'Progress updated successfully' });
+      }
+
+      res.status(403).json({ success: false, message: 'Unauthorized role' });
     } catch (error) {
       next(error);
     }
@@ -185,17 +171,19 @@ router.delete('/:id',
 
       const taskId = req.params.id;
       const userId = req.user.id;
+      const role = req.user.role;
 
-      const task = await Task.findById(taskId).select('userId');
+      const task = await Task.findById(taskId).select('teacherId');
       if (!task) {
         return res.status(404).json({ success: false, message: 'Task not found' });
       }
 
-      if (task.userId.toString() !== userId) {
-        return res.status(403).json({ success: false, message: 'Unauthorized: You can only delete your own tasks' });
+      if (role !== 'teacher' || String(task.teacherId) !== String(userId)) {
+        return res.status(403).json({ success: false, message: 'Unauthorized: Only the owning teacher can delete this task' });
       }
 
       await Task.findByIdAndDelete(taskId);
+      await Progress.deleteMany({ taskId });
 
       res.json({ success: true, message: 'Task deleted successfully' });
     } catch (error) {

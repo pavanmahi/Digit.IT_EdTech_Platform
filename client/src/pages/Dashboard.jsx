@@ -61,6 +61,10 @@ function Dashboard({ setIsAuthenticated }) {
   }
 
   const filterTasks = () => {
+    if (user?.role !== 'student') {
+      setFilteredTasks(tasks)
+      return
+    }
     if (filter === 'all') {
       setFilteredTasks(tasks)
     } else {
@@ -160,11 +164,11 @@ function Dashboard({ setIsAuthenticated }) {
 
   const getProgressColor = (progress) => {
     switch (progress) {
-      case 'not-started':
+      case 'Not Started':
         return 'bg-gray-200 text-gray-800'
-      case 'in-progress':
+      case 'In Progress':
         return 'bg-yellow-200 text-yellow-800'
-      case 'completed':
+      case 'Completed':
         return 'bg-green-200 text-green-800'
       default:
         return 'bg-gray-200 text-gray-800'
@@ -172,16 +176,7 @@ function Dashboard({ setIsAuthenticated }) {
   }
 
   const getProgressLabel = (progress) => {
-    switch (progress) {
-      case 'not-started':
-        return 'Not Started'
-      case 'in-progress':
-        return 'In Progress'
-      case 'completed':
-        return 'Completed'
-      default:
-        return progress
-    }
+    return progress
   }
 
   if (loading) {
@@ -216,10 +211,10 @@ function Dashboard({ setIsAuthenticated }) {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {user?.role === 'student' && user?.teacherId && (
+        {user?.role === 'student' && user?.assignedTeacher && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800">
-              <span className="font-semibold">Assigned Teacher ID:</span> {user.teacherId}
+              <span className="font-semibold">Assigned Teacher ID:</span> {user.assignedTeacher}
             </p>
           </div>
         )}
@@ -271,17 +266,19 @@ function Dashboard({ setIsAuthenticated }) {
 
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-3xl font-bold text-gray-900">
-            {user?.role === 'teacher' ? 'All Tasks' : 'My Tasks'}
+            {user?.role === 'teacher' ? 'My Tasks' : 'Assigned Tasks'}
           </h2>
-          <button
-            onClick={() => setShowAddTask(!showAddTask)}
-            className="btn-primary"
-          >
-            {showAddTask ? 'Cancel' : '+ Add New Task'}
-          </button>
+          {user?.role === 'teacher' && (
+            <button
+              onClick={() => setShowAddTask(!showAddTask)}
+              className="btn-primary"
+            >
+              {showAddTask ? 'Cancel' : '+ Add New Task'}
+            </button>
+          )}
         </div>
 
-        {showAddTask && (
+        {showAddTask && user?.role === 'teacher' && (
           <div className="card mb-6">
             <h3 className="text-xl font-semibold mb-4">Create New Task</h3>
             <form onSubmit={handleAddTask} className="space-y-4">
@@ -327,21 +324,23 @@ function Dashboard({ setIsAuthenticated }) {
           </div>
         )}
 
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Filter by Progress
-          </label>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="input-field max-w-xs"
-          >
-            <option value="all">All Tasks</option>
-            <option value="not-started">Not Started</option>
-            <option value="in-progress">In Progress</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
+        {user?.role === 'student' && (
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Filter by Progress
+            </label>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="input-field max-w-xs"
+            >
+              <option value="all">All Tasks</option>
+              <option value="Not Started">Not Started</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+            </select>
+          </div>
+        )}
 
         <div className="space-y-4">
           {filteredTasks.length === 0 ? (
@@ -349,35 +348,29 @@ function Dashboard({ setIsAuthenticated }) {
               No tasks found. {filter !== 'all' && 'Try changing the filter or '}Create your first task to get started!
             </div>
           ) : (
-            filteredTasks.map(task => {
-              const ownerId = typeof task.userId === 'object' ? (task.userId?._id || task.userId) : task.userId
-              const isOwn = String(ownerId) === String(user?.id)
-              return (
-              <div key={task._id} className="card hover:shadow-lg transition duration-200">
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1">
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                      {task.title}
-                    </h3>
-                    <p className="text-gray-600 mb-3">{task.description}</p>
-                    <div className="flex items-center space-x-4 text-sm text-gray-500">
-                      <span>Due: {formatDate(task.dueDate)}</span>
-                      <span>Created: {formatDate(task.createdAt)}</span>
-                      {user?.role === 'teacher' && !isOwn && (
-                        <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs">
-                          Student Task{task.userId?.email ? `: ${task.userId.email}` : ''}
-                        </span>
-                      )}
+                filteredTasks.map(task => (
+                <div key={task._id} className="card hover:shadow-lg transition duration-200">
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                        {task.title}
+                      </h3>
+                      <p className="text-gray-600 mb-3">{task.description}</p>
+                      <div className="flex items-center space-x-4 text-sm text-gray-500">
+                        <span>Due: {formatDate(task.dueDate)}</span>
+                        <span>Created: {formatDate(task.createdAt)}</span>
+                      </div>
                     </div>
+                    {user?.role === 'student' && (
+                      <div className="ml-4">
+                        <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getProgressColor(task.progress)}`}>
+                          {getProgressLabel(task.progress)}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <div className="ml-4">
-                    <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getProgressColor(task.progress)}`}>
-                      {getProgressLabel(task.progress)}
-                    </span>
-                  </div>
-                </div>
-                
-                {isOwn && user?.role === 'teacher' && (
+
+                {user?.role === 'teacher' && (
                   <div className="pt-4 border-t border-gray-200">
                     {editValues[task._id] ? (
                       <div className="space-y-3">
@@ -427,33 +420,22 @@ function Dashboard({ setIsAuthenticated }) {
                   </div>
                 )}
 
-                {isOwn && user?.role === 'student' && (
+                {user?.role === 'student' && (
                   <div className="flex items-center space-x-3 pt-4 border-t border-gray-200">
                     <select
                       value={task.progress}
                       onChange={(e) => handleUpdateProgress(task._id, e.target.value)}
                       className="input-field max-w-xs"
                     >
-                      <option value="not-started">Not Started</option>
-                      <option value="in-progress">In Progress</option>
-                      <option value="completed">Completed</option>
+                      <option value="Not Started">Not Started</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="Completed">Completed</option>
                     </select>
-                    <button
-                      onClick={() => handleDeleteTask(task._id)}
-                      className="btn-danger"
-                    >
-                      Delete
-                    </button>
                   </div>
                 )}
                 
-                {user?.role === 'teacher' && !isOwn && (
-                  <div className="pt-4 border-t border-gray-200 text-sm text-gray-500 italic">
-                    This task belongs to one of your students. You can view it but cannot modify it.
-                  </div>
-                )}
               </div>
-            )})
+            ))
           )}
         </div>
       </div>

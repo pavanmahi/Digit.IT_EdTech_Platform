@@ -12,6 +12,10 @@ const router = express.Router();
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.body && req.body.email ? `login:${req.body.email}` : req.ip),
+  skipSuccessfulRequests: true,
   message: { success: false, message: 'Too many login attempts, please try again later' }
 });
 
@@ -62,11 +66,11 @@ router.post('/signup',
         return res.status(400).json({ success: false, message: 'Invalid invite code' });
       }
 
-      const newStudent = await User.create({ email, passwordHash, role, teacherId: teacher._id });
+      const newStudent = await User.create({ email, passwordHash, role, assignedTeacher: teacher._id });
       return res.status(201).json({
         success: true,
         message: 'Student created successfully',
-        user: { id: newStudent._id, email: newStudent.email, role: newStudent.role, teacherId: teacher._id }
+        user: { id: newStudent._id, email: newStudent.email, role: newStudent.role, assignedTeacher: teacher._id }
       });
     } catch (error) {
       next(error);
@@ -89,7 +93,7 @@ router.post('/login',
 
       const { email, password } = req.body;
 
-      const user = await User.findOne({ email }).select('_id email passwordHash role teacherId');
+      const user = await User.findOne({ email }).select('_id email passwordHash role assignedTeacher');
       if (!user) {
         return res.status(401).json({ success: false, message: 'Invalid email or password' });
       }
@@ -100,15 +104,20 @@ router.post('/login',
       }
 
       const token = jwt.sign(
-        { id: user._id.toString(), email: user.email, role: user.role, teacherId: user.teacherId ? user.teacherId.toString() : null },
+        { id: user._id.toString(), email: user.email, role: user.role, assignedTeacher: user.assignedTeacher ? user.assignedTeacher.toString() : null },
         process.env.SESSION_SECRET,
         { expiresIn: '24h' }
       );
 
+      const key = req.body && req.body.email ? `login:${req.body.email}` : req.ip;
+      if (typeof loginLimiter.resetKey === 'function') {
+        loginLimiter.resetKey(key);
+      }
+
       res.json({
         success: true,
         token,
-        user: { id: user._id, email: user.email, role: user.role, teacherId: user.teacherId }
+        user: { id: user._id, email: user.email, role: user.role, assignedTeacher: user.assignedTeacher }
       });
     } catch (error) {
       next(error);
@@ -118,8 +127,8 @@ router.post('/login',
 
 router.get('/teachers', async (req, res, next) => {
   try {
-    const teachers = await User.find({ role: 'teacher' }).select('_id email').sort({ email: 1 });
-    res.json({ success: true, teachers: teachers.map(t => ({ id: t._id, email: t.email })) });
+    const teachers = await User.find({ role: 'teacher' }).select('_id email name').sort({ email: 1 });
+    res.json({ success: true, teachers: teachers.map(t => ({ id: t._id, email: t.email, name: t.name })) });
   } catch (error) {
     next(error);
   }
