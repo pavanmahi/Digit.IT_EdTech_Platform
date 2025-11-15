@@ -114,11 +114,113 @@ router.post('/login',
         loginLimiter.resetKey(key);
       }
 
+      let teacherEmail = null;
+      let teacherName = null;
+      if (user.assignedTeacher) {
+        const teacher = await User.findById(user.assignedTeacher).select('email name');
+        if (teacher) {
+          teacherEmail = teacher.email;
+          teacherName = teacher.name || null;
+        }
+      }
+
       res.json({
         success: true,
         token,
-        user: { id: user._id, email: user.email, role: user.role, assignedTeacher: user.assignedTeacher }
+        user: { id: user._id, email: user.email, role: user.role, assignedTeacher: user.assignedTeacher, assignedTeacherEmail: teacherEmail, assignedTeacherName: teacherName }
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get('/me', authenticateToken, async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id).select('_id email name role assignedTeacher');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    let teacherEmail = null;
+    let teacherName = null;
+    if (user.assignedTeacher) {
+      const teacher = await User.findById(user.assignedTeacher).select('email name');
+      if (teacher) {
+        teacherEmail = teacher.email;
+        teacherName = teacher.name || null;
+      }
+    }
+    res.json({ success: true, user: { id: user._id, email: user.email, name: user.name || '', role: user.role, assignedTeacher: user.assignedTeacher, assignedTeacherEmail: teacherEmail, assignedTeacherName: teacherName } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/me',
+  authenticateToken,
+  [
+    body('email').optional().isEmail().normalizeEmail(),
+    body('name').optional().isString().trim()
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, message: 'Invalid input: ' + errors.array().map(e => e.msg).join(', ') });
+      }
+      const updates = {};
+      if (req.body.email !== undefined) updates.email = req.body.email;
+      if (req.body.name !== undefined) updates.name = req.body.name;
+      const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true }).select('_id email name role assignedTeacher');
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+      const token = jwt.sign(
+        { id: user._id.toString(), email: user.email, role: user.role, assignedTeacher: user.assignedTeacher ? user.assignedTeacher.toString() : null },
+        process.env.SESSION_SECRET,
+        { expiresIn: '24h' }
+      );
+      let teacherEmail = null;
+      let teacherName = null;
+      if (user.assignedTeacher) {
+        const teacher = await User.findById(user.assignedTeacher).select('email name');
+        if (teacher) {
+          teacherEmail = teacher.email;
+          teacherName = teacher.name || null;
+        }
+      }
+      res.json({ success: true, message: 'Profile updated', token, user: { id: user._id, email: user.email, name: user.name || '', role: user.role, assignedTeacher: user.assignedTeacher, assignedTeacherEmail: teacherEmail, assignedTeacherName: teacherName } });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post('/change-password',
+  authenticateToken,
+  [
+    body('currentPassword').notEmpty(),
+    body('newPassword').isLength({ min: 6 })
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, message: 'Invalid input: ' + errors.array().map(e => e.msg).join(', ') });
+      }
+      const { currentPassword, newPassword } = req.body;
+      const user = await User.findById(req.user.id).select('_id passwordHash');
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!valid) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
+      const newHash = await bcrypt.hash(newPassword, 10);
+      user.passwordHash = newHash;
+      await user.save();
+      res.json({ success: true, message: 'Password updated successfully' });
     } catch (error) {
       next(error);
     }

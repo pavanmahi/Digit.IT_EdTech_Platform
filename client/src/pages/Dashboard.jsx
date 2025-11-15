@@ -19,6 +19,13 @@ function Dashboard({ setIsAuthenticated }) {
   const [inviteCode, setInviteCode] = useState('')
   const [inviteLoading, setInviteLoading] = useState(false)
   const [editValues, setEditValues] = useState({})
+  const [showProfile, setShowProfile] = useState(false)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [profileError, setProfileError] = useState('')
+  const [profile, setProfile] = useState({ name: '', email: '' })
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' })
+  const [passwordLoading, setPasswordLoading] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
 
   useEffect(() => {
     const userData = localStorage.getItem('user')
@@ -27,6 +34,7 @@ function Dashboard({ setIsAuthenticated }) {
     }
     fetchTasks()
     fetchInviteCodeIfTeacher()
+    fetchAssignedTeacherIfStudent()
   }, [])
 
   useEffect(() => {
@@ -58,6 +66,17 @@ function Dashboard({ setIsAuthenticated }) {
     } finally {
       setInviteLoading(false)
     }
+  }
+
+  const fetchAssignedTeacherIfStudent = async () => {
+    try {
+      const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+      if (currentUser?.role !== 'student') return
+      const resp = await api.get('/auth/me')
+      const updatedUser = resp.data.user
+      localStorage.setItem('user', JSON.stringify(updatedUser))
+      setUser(updatedUser)
+    } catch (err) {}
   }
 
   const filterTasks = () => {
@@ -111,6 +130,61 @@ function Dashboard({ setIsAuthenticated }) {
     localStorage.removeItem('user')
     setIsAuthenticated(false)
     navigate('/login')
+  }
+
+  const openProfile = async () => {
+    setSuccessMessage('')
+    setProfileError('')
+    try {
+      setShowProfile(true)
+      setProfileLoading(true)
+      const resp = await api.get('/auth/me')
+      setProfile({ name: resp.data.user.name || '', email: resp.data.user.email })
+    } catch (err) {
+      setProfileError(err.response?.data?.message || 'Failed to load profile')
+    } finally {
+      setProfileLoading(false)
+    }
+  }
+
+  const closeProfile = () => {
+    setShowProfile(false)
+    setSuccessMessage('')
+    setProfileError('')
+  }
+
+  const saveProfile = async (e) => {
+    e.preventDefault()
+    setProfileError('')
+    setSuccessMessage('')
+    try {
+      setProfileLoading(true)
+      const resp = await api.put('/auth/me', { name: profile.name, email: profile.email })
+      localStorage.setItem('token', resp.data.token)
+      localStorage.setItem('user', JSON.stringify(resp.data.user))
+      setUser(resp.data.user)
+      setSuccessMessage('Profile updated')
+    } catch (err) {
+      setProfileError(err.response?.data?.message || 'Failed to update profile')
+    } finally {
+      setProfileLoading(false)
+    }
+  }
+
+  const changePassword = async (e) => {
+    e.preventDefault()
+    setProfileError('')
+    setSuccessMessage('')
+    try {
+      setPasswordLoading(true)
+      await api.post('/auth/change-password', passwordForm)
+      setSuccessMessage('Password updated successfully')
+      setPasswordForm({ currentPassword: '', newPassword: '' })
+    } catch (err) {
+      setProfileError(err.response?.data?.message || 'Failed to update password')
+    } finally {
+      setPasswordLoading(false)
+    }
   }
 
   const formatDate = (dateString) => {
@@ -196,14 +270,11 @@ function Dashboard({ setIsAuthenticated }) {
               <h1 className="text-2xl font-bold text-primary-700">Digit.It</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <div className="text-sm text-gray-600">
-                <span className="font-semibold">{user?.email}</span>
-                <span className="ml-2 px-2 py-1 bg-primary-100 text-primary-800 rounded">
-                  {user?.role}
+              <button onClick={openProfile} className="flex items-center gap-2 px-3 py-2 bg-primary-600 text-white rounded-full hover:bg-primary-700 focus:ring-2 focus:ring-primary-300">
+                <span className="inline-flex items-center justify-center w-8 h-8 bg-white/20 rounded-full">
+                  {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
                 </span>
-              </div>
-              <button onClick={handleLogout} className="btn-secondary">
-                Logout
+                <span className="font-semibold">Profile</span>
               </button>
             </div>
           </div>
@@ -211,10 +282,94 @@ function Dashboard({ setIsAuthenticated }) {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {showProfile && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+            <div className="absolute inset-0 bg-black/50" onClick={closeProfile}></div>
+            <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4">
+              <button className="absolute top-3 right-3 text-gray-500 hover:text-gray-700 text-2xl leading-none" aria-label="Close" onClick={closeProfile}>×</button>
+              <div className="p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="inline-flex items-center justify-center w-10 h-10 bg-primary-600 text-white rounded-full text-xl">
+                    {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
+                  </div>
+                  <h3 className="text-xl font-semibold">Profile</h3>
+                </div>
+                {profileError && (
+                  <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                    {profileError}
+                    <button onClick={() => setProfileError('')} className="float-right font-bold">×</button>
+                  </div>
+                )}
+                {successMessage && (
+                  <div className="bg-green-100 border border-green-400 text-green-800 px-4 py-3 rounded mb-4">
+                    {successMessage}
+                    <button onClick={() => setSuccessMessage('')} className="float-right font-bold">×</button>
+                  </div>
+                )}
+                <form onSubmit={saveProfile} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={profile.name}
+                      onChange={(e) => setProfile(prev => ({ ...prev, name: e.target.value }))}
+                      className="input-field"
+                      placeholder="Your name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={profile.email}
+                      onChange={(e) => setProfile(prev => ({ ...prev, email: e.target.value }))}
+                      className="input-field"
+                      required
+                    />
+                  </div>
+                  <button type="submit" className="btn-primary w-full" disabled={profileLoading}>
+                    {profileLoading ? 'Saving…' : 'Save Changes'}
+                  </button>
+                </form>
+                <div className="mt-6">
+                  <h4 className="text-lg font-semibold mb-3">Change Password</h4>
+                  <form onSubmit={changePassword} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                      <input
+                        type="password"
+                        value={passwordForm.currentPassword}
+                        onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+                        className="input-field"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                      <input
+                        type="password"
+                        value={passwordForm.newPassword}
+                        onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+                        className="input-field"
+                        required
+                      />
+                    </div>
+                    <button type="submit" className="btn-primary w-full" disabled={passwordLoading}>
+                      {passwordLoading ? 'Updating…' : 'Update Password'}
+                    </button>
+                  </form>
+                  <div className="mt-4">
+                    <button onClick={handleLogout} className="btn-secondary w-full">Logout</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {user?.role === 'student' && user?.assignedTeacher && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800">
-              <span className="font-semibold">Assigned Teacher ID:</span> {user.assignedTeacher}
+              <span className="font-semibold">Assigned Teacher:</span> {user.assignedTeacherEmail || 'Unknown'}
             </p>
           </div>
         )}
